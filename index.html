@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Tweet Logs Graph</title>
+<title>Tweet Logs 時系列グラフ</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -13,24 +13,24 @@
   }
   .controls {
     display: flex;
-    flex-wrap: wrap;
     gap: 20px;
+    flex-wrap: wrap;
     margin-bottom: 20px;
   }
   .group {
     border: 1px solid #ccc;
     padding: 10px;
-    min-width: 200px;
+    min-width: 220px;
   }
 </style>
 </head>
 <body>
 
-<h2>Tweet Logs 時系列グラフ</h2>
+<h2>Tweet グラフ</h2>
 
 <div id="controls" class="controls"></div>
 
-<canvas id="chart" height="120"></canvas>
+<canvas id="chart" height="140"></canvas>
 
 <script>
 /* =====================
@@ -50,9 +50,12 @@ async function fetchJSON(url) {
 }
 
 /* =====================
-   CSV → 時系列変換
+   CSV → 時系列（BOM対応）
 ===================== */
 function csvToTimeSeries(csvText) {
+  // ★ BOM除去（超重要）
+  csvText = csvText.replace(/^\uFEFF/, '');
+
   const lines = csvText.trim().split('\n');
   const headers = lines[0].split(',');
 
@@ -61,13 +64,15 @@ function csvToTimeSeries(csvText) {
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',');
-    const date = cols[0];
+    const date = cols[0].trim();
 
     for (let h = 1; h < headers.length; h++) {
+      const v = Number(cols[h]);
       labels.push(`${date}/${headers[h]}`);
-      values.push(Number(cols[h]));
+      values.push(isNaN(v) ? 0 : v);
     }
   }
+
   return { labels, values };
 }
 
@@ -107,7 +112,10 @@ const chart = new Chart(
   document.getElementById('chart'),
   {
     type: 'line',
-    data: { labels: [], datasets: [] },
+    data: {
+      labels: [],
+      datasets: []
+    },
     options: {
       responsive: true,
       interaction: { mode: 'nearest', intersect: false },
@@ -186,7 +194,7 @@ function updateChart() {
     return;
   }
 
-  // X軸は最初の有効データを基準
+  // X軸は最初の有効データに統一
   chart.data.labels = active[0].labels;
 
   active.forEach(d => {
@@ -219,4 +227,3 @@ let datasets = [];
 
 </body>
 </html>
-
