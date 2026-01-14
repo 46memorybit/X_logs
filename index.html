@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Tweet Log Viewer</title>
+<title>Tweet Log Timeline</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
   body { font-family: sans-serif; }
@@ -13,13 +13,23 @@
 </head>
 <body>
 
-<h2>ツイート時間帯グラフ（1時間単位）</h2>
+<h2>ツイート時系列（1時間単位）</h2>
 
 <div class="filter">
-  期間指定：
-  <input type="date" id="startDate">
-  〜
-  <input type="date" id="endDate">
+  期間：
+  <select id="rangeSelect">
+    <option value="1d" selected>1日</option>
+    <option value="7d">1週間</option>
+    <option value="30d">1か月</option>
+    <option value="custom">カスタム</option>
+  </select>
+
+  <span id="customRange" style="display:none">
+    <input type="date" id="startDate">
+    〜
+    <input type="date" id="endDate">
+  </span>
+
   <button onclick="updateChart()">反映</button>
 </div>
 
@@ -29,7 +39,7 @@
 
 <script>
 /* =============================
-   フォルダ・CSV 定義
+   データ定義
    ============================= */
 const DATA_STRUCTURE = {
   "櫻坂46": {
@@ -42,37 +52,59 @@ const DATA_STRUCTURE = {
   }
 };
 
-const TIME_LABELS = [
-  "0~1","1~2","2~3","3~4","4~5","5~6","6~7","7~8",
-  "8~9","9~10","10~11","11~12","12~13","13~14",
-  "14~15","15~16","16~17","17~18","18~19","19~20",
-  "20~21","21~22","22~23","23~24"
-];
-
+const HOURS = [...Array(24)].map((_, i) => `${i}~${i+1}`);
 let chart;
 
 /* =============================
-   CSV 読み込み（期間フィルタ対応）
+   期間計算
+   ============================= */
+function getDateRange() {
+  const today = new Date();
+  const end = new Date(today);
+  const start = new Date(today);
+  const type = rangeSelect.value;
+
+  if (type === "1d") {
+    // 今日のみ
+  } else if (type === "7d") {
+    start.setDate(start.getDate() - 6);
+  } else if (type === "30d") {
+    start.setMonth(start.getMonth() - 1);
+  } else {
+    return {
+      start: startDate.value,
+      end: endDate.value
+    };
+  }
+
+  return {
+    start: start.toISOString().slice(0,10),
+    end: end.toISOString().slice(0,10)
+  };
+}
+
+/* =============================
+   CSV 読み込み（時系列）
    ============================= */
 async function loadCSV(path, start, end) {
   const text = await fetch(path).then(r => r.text());
-  const lines = text.trim().split("\n");
-  const headers = lines[0].split(",");
-  const sum = Array(24).fill(0);
+  const lines = text.trim().split("\n").slice(1);
 
-  lines.slice(1).forEach(line => {
+  const map = new Map();
+
+  lines.forEach(line => {
     const cols = line.split(",");
     const date = cols[0];
 
-    if (start && date < start) return;
-    if (end && date > end) return;
+    if (date < start || date > end) return;
 
     for (let i = 1; i <= 24; i++) {
-      sum[i - 1] += Number(cols[i] || 0);
+      const key = `${date} ${HOURS[i-1]}`;
+      map.set(key, (map.get(key) || 0) + Number(cols[i] || 0));
     }
   });
 
-  return sum;
+  return map;
 }
 
 /* =============================
@@ -98,23 +130,20 @@ function buildControls() {
     filesDiv.className = "files";
 
     g.files.forEach(file => {
-      const fCheck = document.createElement("input");
-      fCheck.type = "checkbox";
-      fCheck.checked = true;
-      fCheck.dataset.path = g.folder + file;
-      fCheck.addEventListener("change", updateChart);
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = true;
+      cb.dataset.path = g.folder + file;
+      cb.addEventListener("change", updateChart);
 
-      const fLabel = document.createElement("label");
-      fLabel.append(fCheck, " ", file);
+      const label = document.createElement("label");
+      label.append(cb, " ", file);
 
-      filesDiv.appendChild(fLabel);
-      filesDiv.appendChild(document.createElement("br"));
+      filesDiv.append(label, document.createElement("br"));
     });
 
     gCheck.addEventListener("change", () => {
-      filesDiv.querySelectorAll("input").forEach(cb => {
-        cb.checked = gCheck.checked;
-      });
+      filesDiv.querySelectorAll("input").forEach(c => c.checked = gCheck.checked);
       updateChart();
     });
 
@@ -127,33 +156,40 @@ function buildControls() {
    グラフ更新
    ============================= */
 async function updateChart() {
-  const start = document.getElementById("startDate").value;
-  const end = document.getElementById("endDate").value;
-
-  const datasets = [];
+  const { start, end } = getDateRange();
   const checks = document.querySelectorAll(".files input:checked");
 
+  const merged = new Map();
+  const datasets = [];
+
   for (const cb of checks) {
-    const data = await loadCSV(cb.dataset.path, start, end);
-    datasets.push({
-      label: cb.dataset.path.split("/").pop(),
-      data,
-      tension: 0.2
+    const map = await loadCSV(cb.dataset.path, start, end);
+    map.forEach((v, k) => {
+      if (!merged.has(k)) merged.set(k, {});
+      merged.get(k)[cb.dataset.path] = v;
     });
   }
 
+  const labels = [...merged.keys()].sort();
+
+  checks.forEach(cb => {
+    datasets.push({
+      label: cb.dataset.path.split("/").pop(),
+      data: labels.map(l => merged.get(l)?.[cb.dataset.path] || 0),
+      tension: 0.2
+    });
+  });
+
   if (chart) chart.destroy();
 
-  chart = new Chart(document.getElementById("chart"), {
+  chart = new Chart(chartCanvas, {
     type: "line",
-    data: {
-      labels: TIME_LABELS,
-      datasets
-    },
+    data: { labels, datasets },
     options: {
       responsive: true,
       interaction: { mode: "nearest", intersect: false },
       scales: {
+        x: { ticks: { maxRotation: 90, minRotation: 90 } },
         y: { beginAtZero: true }
       }
     }
@@ -161,8 +197,13 @@ async function updateChart() {
 }
 
 /* =============================
-   初期化
+   UI 制御
    ============================= */
+rangeSelect.onchange = () => {
+  customRange.style.display =
+    rangeSelect.value === "custom" ? "inline" : "none";
+};
+
 buildControls();
 updateChart();
 </script>
