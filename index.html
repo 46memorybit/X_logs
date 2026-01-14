@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Tweet Logs Graph</title>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    .controls {
+      display: flex;
+      gap: 40px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .group {
+      border: 1px solid #ccc;
+      padding: 10px;
+    }
+  </style>
+</head>
+<body>
+
+<h2>Tweet Logs Graph</h2>
+
+<div id="controls" class="controls"></div>
+
+<canvas id="chart"></canvas>
+
+<script>
+/* ============================
+   設定
+============================ */
+const OWNER = 'YOUR_GITHUB_NAME';
+const REPO  = 'YOUR_REPO_NAME';
+const BASE_PATH = 'tweet/logs';
+
+/* ============================
+   GitHub API
+============================ */
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(res.status);
+  return res.json();
+}
+
+/* ============================
+   CSV パース
+============================ */
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  const headers = lines[0].split(',');
+  return lines.slice(1).map(line => {
+    const cols = line.split(',');
+    const row = {};
+    headers.forEach((h, i) => row[h] = cols[i]);
+    return row;
+  });
+}
+
+/* ============================
+   データ読み込み
+============================ */
+async function loadAllCSVs() {
+  const folders = await fetchJSON(
+    `https://api.github.com/repos/${OWNER}/${REPO}/contents/${BASE_PATH}`
+  );
+
+  const datasets = [];
+
+  for (const folder of folders.filter(f => f.type === 'dir')) {
+    const files = await fetchJSON(folder.url);
+
+    for (const file of files.filter(f => f.name.endsWith('.csv'))) {
+      const csvText = await fetch(file.download_url).then(r => r.text());
+      const rows = parseCSV(csvText);
+
+      const labels = [];
+      const values = [];
+
+      rows.forEach(row => {
+        const date = row[Object.keys(row)[0]];
+        Object.keys(row).slice(1).forEach(key => {
+          labels.push(`${date}/${key}`);
+          values.push(Number(row[key]));
+        });
+      });
+
+      datasets.push({
+        folder: folder.name,
+        file: file.name,
+        label: `${folder.name}/${file.name}`,
+        labels,
+        data: values
+      });
+    }
+  }
+  return datasets;
+}
+
+/* ============================
+   グラフ
+============================ */
+const ctx = document.getElementById('chart');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: []
+  },
+  options: {
+    responsive: true,
+    interaction: { mode: 'nearest', intersect: false },
+    scales: {
+      x: { ticks: { maxRotation: 90, minRotation: 90 } }
+    }
+  }
+});
+
+/* ============================
+   チェックボックス
+============================ */
+function buildControls(datasets) {
+  const container = document.getElementById('controls');
+  container.innerHTML = '';
+
+  const byFolder = {};
+  datasets.forEach(d => {
+    byFolder[d.folder] ??= [];
+    byFolder[d.folder].push(d);
+  });
+
+  Object.entries(byFolder).forEach(([folder, files]) => {
+    const div = document.createElement('div');
+    div.className = 'group';
+
+    const folderCb = document.createElement('input');
+    folderCb.type = 'checkbox';
+    folderCb.checked = true;
+
+    const title = document.createElement('label');
+    title.textContent = folder;
+
+    div.append(folderCb, title, document.createElement('br'));
+
+    files.forEach(f => {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+
+      cb.onchange = updateChart;
+      div.append(cb, f.file, document.createElement('br'));
+      f._cb = cb;
+    });
+
+    folderCb.onchange = () => {
+      files.forEach(f => f._cb.checked = folderCb.checked);
+      updateChart();
+    };
+
+    container.appendChild(div);
+  });
+}
+
+/* ============================
+   グラフ更新
+============================ */
+function updateChart() {
+  chart.data.datasets = [];
+  chart.data.labels = [];
+
+  datasets.forEach(d => {
+    if (!d._cb.checked) return;
+
+    chart.data.labels = d.labels;
+    chart.data.datasets.push({
+      label: d.label,
+      data: d.data,
+      borderWidth: 1
+    });
+  });
+
+  chart.update();
+}
+
+/* ============================
+   初期化
+============================ */
+let datasets = [];
+
+(async () => {
+  datasets = await loadAllCSVs();
+  buildControls(datasets);
+  updateChart();
+})();
+</script>
+
+</body>
+</html>
